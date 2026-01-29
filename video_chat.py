@@ -18,7 +18,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 waiting_users = []  # List of socket_ids waiting for a partner
 active_pairs = {}   # Map socket_id -> partner_socket_id
 users = {}          # Map socket_id -> {'name': str, 'gender': str, 'interest': str}
-connected_users_count = 1000
+connected_users_count = 0 
 
 # --- FRONTEND TEMPLATE (HTML/CSS/JS) ---
 HTML_TEMPLATE = """
@@ -53,10 +53,10 @@ HTML_TEMPLATE = """
     </script>
     <style>
         body { font-family: 'Inter', sans-serif; }
-        video {
-            transform: scaleX(-1); /* Mirror view */
-            background-color: #0f172a;
-        }
+        /* Only mirror local video, NOT remote video */
+        video.mirrored { transform: scaleX(-1); }
+        video { background-color: #0f172a; }
+        
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         
@@ -169,6 +169,7 @@ HTML_TEMPLATE = """
             
             <!-- Main Stage (Remote) -->
             <div class="relative w-full h-full max-h-[80vh] flex justify-center items-center overflow-hidden rounded-2xl bg-slate-900 shadow-2xl border border-slate-800">
+                <!-- IMPORTANT: Removed 'mirrored' class from remote video so faces are not flipped -->
                 <video id="remoteVideo" autoplay playsinline class="w-full h-full object-contain"></video>
                 
                 <!-- Empty State -->
@@ -208,15 +209,19 @@ HTML_TEMPLATE = """
 
             <!-- Self View (Picture-in-Picture style) -->
             <div class="absolute bottom-6 right-6 w-32 md:w-56 aspect-video bg-slate-800 rounded-xl overflow-hidden border-2 border-slate-700/50 shadow-2xl z-20 group transition-transform hover:scale-105">
-                <video id="localVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                <!-- Local video IS mirrored so it acts like a mirror -->
+                <video id="localVideo" autoplay playsinline muted class="w-full h-full object-cover mirrored"></video>
                 
                 <!-- Media Controls (Hover) -->
                 <div class="absolute inset-0 bg-black/40 flex items-center justify-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 backdrop-blur-[2px]">
-                    <button id="toggleMicBtn" class="w-8 h-8 rounded-full bg-slate-200/20 hover:bg-white/90 hover:text-slate-900 text-white backdrop-blur-md flex items-center justify-center transition-all">
+                    <button id="toggleMicBtn" class="w-8 h-8 rounded-full bg-slate-200/20 hover:bg-white/90 hover:text-slate-900 text-white backdrop-blur-md flex items-center justify-center transition-all" title="Toggle Mic">
                         <i class="fas fa-microphone"></i>
                     </button>
-                    <button id="toggleCamBtn" class="w-8 h-8 rounded-full bg-slate-200/20 hover:bg-white/90 hover:text-slate-900 text-white backdrop-blur-md flex items-center justify-center transition-all">
+                    <button id="toggleCamBtn" class="w-8 h-8 rounded-full bg-slate-200/20 hover:bg-white/90 hover:text-slate-900 text-white backdrop-blur-md flex items-center justify-center transition-all" title="Toggle Cam">
                         <i class="fas fa-video"></i>
+                    </button>
+                    <button id="shareScreenBtn" class="w-8 h-8 rounded-full bg-indigo-500/20 hover:bg-indigo-500 text-white backdrop-blur-md flex items-center justify-center transition-all" title="Share Screen">
+                        <i class="fas fa-desktop"></i>
                     </button>
                 </div>
             </div>
@@ -293,6 +298,7 @@ HTML_TEMPLATE = """
         const typingNameEl = document.getElementById('typingName');
         const toggleMicBtn = document.getElementById('toggleMicBtn');
         const toggleCamBtn = document.getElementById('toggleCamBtn');
+        const shareScreenBtn = document.getElementById('shareScreenBtn');
         const partnerInfoTag = document.getElementById('partnerInfoTag');
         const partnerNameDisplay = document.getElementById('partnerNameDisplay');
         const greetingOverlay = document.getElementById('greetingOverlay');
@@ -354,6 +360,7 @@ HTML_TEMPLATE = """
         };
 
         let localStream;
+        let screenStream; // Track the screen stream
         let peerConnection;
         let partnerId = null;
         let partnerName = "Stranger";
@@ -361,8 +368,9 @@ HTML_TEMPLATE = """
         let typingTimeout = null;
         let myName = "";
         let myData = {};
+        let isScreenSharing = false;
 
-        // --- 0. LOGIN & STORAGE LOGIC ---
+        // --- 0. LOGIN & STORAGE ---
 
         function saveProfile(profile) {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
@@ -422,7 +430,7 @@ HTML_TEMPLATE = """
             setTimeout(() => loginModal.classList.add('hidden'), 300);
         });
 
-        // --- 1. MEDIA ---
+        // --- 1. MEDIA & SCREEN SHARE ---
         async function startCamera() {
             try {
                 if (!localStream) {
@@ -432,6 +440,66 @@ HTML_TEMPLATE = """
             } catch (err) {
                 alert("Please enable camera access to use this app.");
             }
+        }
+
+        async function toggleScreenShare() {
+            if (isScreenSharing) {
+                // Stop Sharing
+                stopScreenShare();
+            } else {
+                // Start Sharing
+                try {
+                    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                    const screenTrack = screenStream.getVideoTracks()[0];
+                    
+                    if (peerConnection) {
+                        const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                        if (sender) {
+                            sender.replaceTrack(screenTrack);
+                        }
+                    }
+                    
+                    // Show screen locally
+                    localVideo.srcObject = screenStream;
+                    localVideo.classList.remove('mirrored'); // Don't mirror screen
+                    isScreenSharing = true;
+                    shareScreenBtn.classList.add('bg-red-500', 'hover:bg-red-600');
+                    shareScreenBtn.innerHTML = '<i class="fas fa-times-circle"></i>';
+
+                    // Handle system stop button
+                    screenTrack.onended = () => {
+                        stopScreenShare();
+                    };
+
+                } catch (e) {
+                    console.error("Screen share cancelled", e);
+                }
+            }
+        }
+
+        function stopScreenShare() {
+            if (!isScreenSharing) return;
+            
+            // Stop screen tracks
+            if (screenStream) {
+                screenStream.getTracks().forEach(track => track.stop());
+            }
+
+            // Revert to camera
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (peerConnection) {
+                const sender = peerConnection.getSenders().find(s => s.track.kind === 'video');
+                if (sender) {
+                    sender.replaceTrack(videoTrack);
+                }
+            }
+            
+            localVideo.srcObject = localStream;
+            localVideo.classList.add('mirrored'); // Re-enable mirror for camera
+            isScreenSharing = false;
+            shareScreenBtn.classList.remove('bg-red-500', 'hover:bg-red-600');
+            shareScreenBtn.classList.add('bg-indigo-500/20');
+            shareScreenBtn.innerHTML = '<i class="fas fa-desktop"></i>';
         }
         
         toggleMicBtn.addEventListener('click', (e) => {
@@ -450,6 +518,11 @@ HTML_TEMPLATE = """
             track.enabled = !track.enabled;
             toggleCamBtn.innerHTML = track.enabled ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash text-red-400"></i>';
             toggleCamBtn.classList.toggle('bg-red-500/20', !track.enabled);
+        });
+
+        shareScreenBtn.addEventListener('click', (e) => {
+             e.preventDefault();
+             toggleScreenShare();
         });
 
         // --- 2. SOCKET EVENTS ---
@@ -518,6 +591,7 @@ HTML_TEMPLATE = """
             partnerName = "Stranger";
             partnerInfoTag.classList.add('hidden');
             remotePlaceholder.classList.remove('hidden');
+            stopScreenShare(); // Reset screen share state
         });
 
         socket.on('receive_message', (data) => {
@@ -549,26 +623,43 @@ HTML_TEMPLATE = """
 
         // --- 3. WebRTC ---
         function startWebRTC(isOfferer) {
+            console.log("Starting WebRTC. Offerer:", isOfferer);
             peerConnection = new RTCPeerConnection(peerConnectionConfig);
-            if (localStream) localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
 
+            // Handle incoming stream
             peerConnection.ontrack = (event) => {
-                remoteVideo.srcObject = event.streams[0];
+                console.log("Track received");
+                if (remoteVideo.srcObject !== event.streams[0]) {
+                    remoteVideo.srcObject = event.streams[0];
+                    // FORCE PLAY to fix "cannot see face" issues
+                    remoteVideo.play().catch(e => console.error("Error playing video:", e));
+                }
             };
 
             peerConnection.onicecandidate = (event) => {
-                if (event.candidate) socket.emit('signal', { target: partnerId, type: 'candidate', candidate: event.candidate });
+                if (event.candidate) {
+                    socket.emit('signal', { target: partnerId, type: 'candidate', candidate: event.candidate });
+                }
             };
 
             if (isOfferer) {
-                peerConnection.onnegotiationneeded = async () => {
-                    try {
-                        const offer = await peerConnection.createOffer();
-                        await peerConnection.setLocalDescription(offer);
-                        socket.emit('signal', { target: partnerId, type: 'offer', sdp: offer });
-                    } catch (err) { console.error(err); }
-                };
+                 // Moved outside onnegotiationneeded to prevent race conditions
+                 createAndSendOffer();
             }
+        }
+        
+        async function createAndSendOffer() {
+             try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                socket.emit('signal', { target: partnerId, type: 'offer', sdp: offer });
+            } catch (err) { console.error("Offer Error:", err); }
         }
 
         function closeConnection() {
@@ -608,6 +699,7 @@ HTML_TEMPLATE = """
                 socket.emit('leave_chat');
                 closeConnection();
                 addSystemMessage("You stopped the chat.", 'error');
+                stopScreenShare();
             }
             isSearching = false;
             overlay.classList.add('hidden');
@@ -668,119 +760,3 @@ HTML_TEMPLATE = """
     </script>
 </body>
 </html>
-"""
-
-# --- ROUTES ---
-
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-# --- SOCKET LOGIC ---
-
-@socketio.on('connect')
-def handle_connect():
-    global connected_users_count
-    connected_users_count += 1
-    logger.info(f"User connected: {request.sid}. Total: {connected_users_count}")
-    emit('user_count', connected_users_count, broadcast=True)
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    global connected_users_count
-    connected_users_count -= 1
-    sid = request.sid
-    logger.info(f"User disconnected: {sid}")
-    
-    if sid in users: del users[sid]
-    if sid in waiting_users: waiting_users.remove(sid)
-    
-    if sid in active_pairs:
-        partner_id = active_pairs[sid]
-        emit('partner_disconnected', room=partner_id)
-        del active_pairs[sid]
-        if partner_id in active_pairs:
-            del active_pairs[partner_id]
-            
-    emit('user_count', connected_users_count, broadcast=True)
-
-@socketio.on('join_user')
-def handle_join_user(data):
-    users[request.sid] = {
-        'name': data.get('name', 'Stranger'),
-        'gender': data.get('gender', 'unknown'),
-        'interest': data.get('interest', 'any')
-    }
-
-def check_match(user_a, user_b):
-    a_wants_b = (user_a['interest'] in ['any', 'both']) or (user_a['interest'] == user_b['gender'])
-    b_wants_a = (user_b['interest'] in ['any', 'both']) or (user_b['interest'] == user_a['gender'])
-    return a_wants_b and b_wants_a
-
-@socketio.on('find_partner')
-def find_partner():
-    sid = request.sid
-    if sid in active_pairs or sid in waiting_users: return
-
-    current_user = users.get(sid)
-    if not current_user: return
-
-    partner_id = None
-    match_index = -1
-    
-    for i, waiter_sid in enumerate(waiting_users):
-        waiter = users.get(waiter_sid)
-        if waiter and check_match(current_user, waiter):
-            match_index = i
-            partner_id = waiter_sid
-            break
-            
-    if partner_id:
-        waiting_users.pop(match_index)
-        active_pairs[sid] = partner_id
-        active_pairs[partner_id] = sid
-        
-        partner_user = users.get(partner_id)
-        
-        emit('match_found', {'partner_id': partner_id, 'partner_name': partner_user['name'], 'role': 'offerer'}, room=sid)
-        emit('match_found', {'partner_id': sid, 'partner_name': current_user['name'], 'role': 'answerer'}, room=partner_id)
-        logger.info(f"Matched {sid} with {partner_id}")
-    else:
-        waiting_users.append(sid)
-        logger.info(f"User {sid} added to queue")
-
-@socketio.on('leave_chat')
-def leave_chat():
-    sid = request.sid
-    if sid in active_pairs:
-        partner_id = active_pairs[sid]
-        emit('partner_disconnected', room=partner_id)
-        del active_pairs[sid]
-        if partner_id in active_pairs:
-            del active_pairs[partner_id]
-
-@socketio.on('leave_queue')
-def leave_queue():
-    sid = request.sid
-    if sid in waiting_users: waiting_users.remove(sid)
-
-@socketio.on('signal')
-def handle_signal(data):
-    target = data.get('target')
-    if target: emit('signal', data, room=target)
-
-@socketio.on('send_message')
-def handle_message(data):
-    target = data.get('target')
-    msg = data.get('msg')
-    if target and msg: emit('receive_message', {'msg': msg}, room=target)
-
-@socketio.on('typing')
-def handle_typing(data):
-    target = data.get('target')
-    is_typing = data.get('isTyping')
-    if target: emit('partner_typing', {'isTyping': is_typing}, room=target)
-
-if __name__ == '__main__':
-    print("Starting Professional Video Chat Server on http://localhost:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
