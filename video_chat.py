@@ -356,7 +356,8 @@ HTML_TEMPLATE = """
             'iceServers': [
                 {'urls': 'stun:stun.l.google.com:19302'},
                 {'urls': 'stun:stun1.l.google.com:19302'}
-            ]
+            ],
+            bundlePolicy: 'max-bundle' // Helps with A/V sync
         };
 
         let localStream;
@@ -434,7 +435,18 @@ HTML_TEMPLATE = """
         async function startCamera() {
             try {
                 if (!localStream) {
-                    localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640 }, audio: true });
+                    localStream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            width: { ideal: 640 }, 
+                            height: { ideal: 480 },
+                            frameRate: { ideal: 30, max: 30 }
+                        }, 
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    });
                     localVideo.srcObject = localStream;
                 }
             } catch (err) {
@@ -635,11 +647,20 @@ HTML_TEMPLATE = """
             // Handle incoming stream
             peerConnection.ontrack = (event) => {
                 console.log("Track received");
-                if (remoteVideo.srcObject !== event.streams[0]) {
-                    remoteVideo.srcObject = event.streams[0];
-                    // FORCE PLAY to fix "cannot see face" issues
-                    remoteVideo.play().catch(e => console.error("Error playing video:", e));
+                
+                let stream = event.streams[0];
+                // Robustness: create stream if missing
+                if (!stream) {
+                    stream = new MediaStream();
+                    stream.addTrack(event.track);
                 }
+
+                if (remoteVideo.srcObject !== stream) {
+                    remoteVideo.srcObject = stream;
+                    console.log("Setting remote stream");
+                }
+                // FORCE PLAY to fix "cannot see face" issues
+                remoteVideo.play().catch(e => console.error("Error playing video:", e));
             };
 
             peerConnection.onicecandidate = (event) => {
