@@ -18,7 +18,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 waiting_users = []  # List of socket_ids waiting for a partner
 active_pairs = {}   # Map socket_id -> partner_socket_id
 users = {}          # Map socket_id -> {'name': str, 'gender': str, 'interest': str}
-connected_users_count = 0
+connected_users_count = 1000
 
 # --- FRONTEND TEMPLATE (HTML/CSS/JS) ---
 HTML_TEMPLATE = """
