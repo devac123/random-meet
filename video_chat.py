@@ -143,7 +143,7 @@ HTML_TEMPLATE = """
               <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
             </div>
             <h1 class="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-                Connect<span class="text-indigo-500">.py</span>
+                Anonemet<span class="text-indigo-500">.com</span>
             </h1>
         </div>
 
